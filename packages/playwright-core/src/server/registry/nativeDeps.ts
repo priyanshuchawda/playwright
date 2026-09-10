@@ -995,7 +995,7 @@ export const deps: any = {
       'fontconfig',
       'freetype',
       'xorg-x11-fonts-misc',
-      'liberation-fonts',
+      'liberation-fonts-all',
       'google-noto-sans-jp-fonts',
       'google-noto-sans-cjk-vf-fonts',
       'google-noto-sans-thai-vf-fonts',

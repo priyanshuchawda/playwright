@@ -20,7 +20,7 @@ import os from 'os';
 import path from 'path';
 
 import { wrapInASCIIBox } from '@utils/ascii';
-import { hostPlatform, isOfficiallySupportedPlatform } from '@utils/hostPlatform';
+import { hostPlatform, isOfficiallySupportedPlatform, usesRpmPackageManager } from '@utils/hostPlatform';
 import { spawnAsync } from '@utils/processLauncher';
 import { getPlaywrightVersion } from '../userAgent';
 import { deps } from './nativeDeps';
@@ -104,15 +104,24 @@ export async function installDependenciesLinux(targets: Set<DependencyGroup>, dr
   }
   const uniqueLibraries = Array.from(new Set(libraries));
   if (dryRun) {
-    await reportMissingDependenciesLinux(uniqueLibraries);
+    if (usesRpmPackageManager(platform))
+      await reportMissingDependenciesRpm(uniqueLibraries);
+    else
+      await reportMissingDependenciesLinux(uniqueLibraries);
     return;
   }
   console.log(`Installing dependencies...`);  // eslint-disable-line no-console
   const commands: string[] = [];
-  commands.push('apt-get update');
-  commands.push(['apt-get', 'install', '-y', '--no-install-recommends',
-    ...uniqueLibraries,
-  ].join(' '));
+  if (usesRpmPackageManager(platform)) {
+    commands.push(['dnf', 'install', '-y', '--setopt=install_weak_deps=False',
+      ...uniqueLibraries,
+    ].join(' '));
+  } else {
+    commands.push('apt-get update');
+    commands.push(['apt-get', 'install', '-y', '--no-install-recommends',
+      ...uniqueLibraries,
+    ].join(' '));
+  }
   const { command, args, elevatedPermissions } = await transformCommandsForRoot(commands);
   if (elevatedPermissions)
     console.log('Switching to root user to install dependencies...'); // eslint-disable-line no-console
@@ -121,6 +130,22 @@ export async function installDependenciesLinux(targets: Set<DependencyGroup>, dr
     child.on('exit', (code: number) => code === 0 ? resolve() : reject(new Error(`Installation process exited with code: ${code}`)));
     child.on('error', reject);
   });
+}
+
+async function reportMissingDependenciesRpm(packages: string[]) {
+  const missingPackages: string[] = [];
+  for (const pkg of packages) {
+    const { code } = await spawnAsync('rpm', ['-q', pkg], {});
+    if (code !== 0)
+      missingPackages.push(pkg);
+  }
+  if (!missingPackages.length) {
+    console.log('All system dependencies are installed.'); // eslint-disable-line no-console
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.log(`Missing system dependencies (${missingPackages.length}):\n${missingPackages.sort().map(p => `  ${p}`).join('\n')}`);
+  process.exitCode = 1;
 }
 
 async function reportMissingDependenciesLinux(packages: string[]) {
@@ -231,7 +256,7 @@ export async function validateDependenciesLinux(sdkLanguage: string, linuxLddDir
 
   const libraryToPackageNameMapping = deps[hostPlatform] ? {
     ...(deps[hostPlatform]?.lib2package || {}),
-    ...MANUAL_LIBRARY_TO_PACKAGE_NAME_UBUNTU,
+    ...(usesRpmPackageManager(hostPlatform) ? MANUAL_LIBRARY_TO_PACKAGE_NAME_RPM : MANUAL_LIBRARY_TO_PACKAGE_NAME_UBUNTU),
   } : {};
   // Translate missing dependencies to package names to install with apt.
   for (const missingDep of missingDeps) {
@@ -265,9 +290,11 @@ export async function validateDependenciesLinux(sdkLanguage: string, linuxLddDir
       ``,
       `    ${maybeSudo}${buildPlaywrightCLICommand(sdkLanguage, 'install-deps')}`,
       ``,
-      `- (alternative 2) use apt inside Docker:`,
+      `- (alternative 2) use ${usesRpmPackageManager(hostPlatform) ? 'dnf' : 'apt'} inside Docker:`,
       ``,
-      `    ${maybeSudo}apt-get install ${[...missingPackages].join('\\\n        ')}`,
+      usesRpmPackageManager(hostPlatform) ?
+        `    ${maybeSudo}dnf install ${[...missingPackages].join(' \\\n        ')}` :
+        `    ${maybeSudo}apt-get install ${[...missingPackages].join('\\\n        ')}`,
       ``,
       `<3 Playwright Team`,
     ]);
@@ -279,8 +306,10 @@ export async function validateDependenciesLinux(sdkLanguage: string, linuxLddDir
       ``,
       `    ${maybeSudo}${buildPlaywrightCLICommand(sdkLanguage, 'install-deps')}`,
       ``,
-      `Alternatively, use apt:`,
-      `    ${maybeSudo}apt-get install ${[...missingPackages].join('\\\n        ')}`,
+      usesRpmPackageManager(hostPlatform) ? `Alternatively, use dnf:` : `Alternatively, use apt:`,
+      usesRpmPackageManager(hostPlatform) ?
+        `    ${maybeSudo}dnf install ${[...missingPackages].join(' \\\n        ')}` :
+        `    ${maybeSudo}apt-get install ${[...missingPackages].join('\\\n        ')}`,
       ``,
       `<3 Playwright Team`,
     ]);
@@ -380,6 +409,10 @@ const MANUAL_LIBRARY_TO_PACKAGE_NAME_UBUNTU: { [s: string]: string} = {
   // and if it's missing recommend installing missing gstreamer lib.
   // gstreamer1.0-libav -> libavcodec57 -> libx264-152
   'libx264.so': 'gstreamer1.0-libav',
+};
+
+const MANUAL_LIBRARY_TO_PACKAGE_NAME_RPM: { [s: string]: string} = {
+  'libx264.so': 'gstreamer1-plugin-libav',
 };
 
 function quoteProcessArgs(args: string[]): string[] {

@@ -36,6 +36,7 @@ export type HostPlatform = 'win64' |
                            'debian11-x64' | 'debian11-arm64' |
                            'debian12-x64' | 'debian12-arm64' |
                            'debian13-x64' | 'debian13-arm64' |
+                           'fedora-x64' | 'fedora-arm64' |
                            '<unknown>';
 
 function calculatePlatform(): { hostPlatform: HostPlatform, isOfficiallySupportedPlatform: boolean } {
@@ -119,6 +120,11 @@ function calculatePlatform(): { hostPlatform: HostPlatform, isOfficiallySupporte
       if (distroInfo?.version === '')
         return { hostPlatform: ('debian13' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform };
     }
+    if (distroInfo?.id === 'fedora') {
+      const major = parseInt(distroInfo.version, 10);
+      const isSupported = !Number.isNaN(major) && major >= 40;
+      return { hostPlatform: ('fedora' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform: isSupported };
+    }
     return { hostPlatform: ('ubuntu24.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform: false };
   }
   if (platform === 'win32')
@@ -141,3 +147,7 @@ function toShortPlatform(hostPlatform: HostPlatform): ShortPlatform {
 }
 
 export const shortPlatform = toShortPlatform(hostPlatform);
+
+export function usesRpmPackageManager(platform: HostPlatform): boolean {
+  return platform.startsWith('fedora');
+}
